@@ -1,0 +1,330 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+// ignore: depend_on_referenced_packages
+import 'package:sqflite/sqflite.dart';
+// ignore: depend_on_referenced_packages
+import 'package:path/path.dart';
+
+// Modelo de dados para o planeta
+class Planeta {
+  int? id;
+  String nome;
+  double distanciaDoSol;
+  double tamanho;
+  String? apelido;
+
+  Planeta({this.id, required this.nome, required this.distanciaDoSol, required this.tamanho, this.apelido});
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'nome': nome,
+      'distanciaDoSol': distanciaDoSol,
+      'tamanho': tamanho,
+      'apelido': apelido,
+    };
+  }
+
+  static Planeta fromMap(Map<String, dynamic> map) {
+    return Planeta(
+      id: map['id'],
+      nome: map['nome'],
+      distanciaDoSol: map['distanciaDoSol'],
+      tamanho: map['tamanho'],
+      apelido: map['apelido'],
+    );
+  }
+}
+
+// Gerenciador do banco de dados
+class DatabaseHelper {
+  static final DatabaseHelper _instance = DatabaseHelper._internal();
+  factory DatabaseHelper() => _instance;
+  DatabaseHelper._internal();
+
+  static Database? _database;
+
+  Future<Database> get database async {
+    if (_database != null) return _database!;
+    _database = await _initDatabase();
+    return _database!;
+  }
+
+  Future<Database> _initDatabase() async {
+    String path = join(await getDatabasesPath(), 'planetas.db');
+    return openDatabase(
+      path,
+      version: 1,
+      onCreate: (db, version) {
+        return db.execute(
+          'CREATE TABLE planetas(id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT, distanciaDoSol REAL, tamanho REAL, apelido TEXT)'
+        );
+      },
+    );
+  }
+
+  Future<int> inserirPlaneta(Planeta planeta) async {
+    try {
+      final db = await database;
+      return await db.insert('planetas', planeta.toMap());
+    } catch (error) {
+      print('Erro ao inserir planeta: $error');
+      rethrow;
+    }
+  }
+
+  Future<List<Planeta>> listarPlanetas() async {
+    final db = await database;
+    final List<Map<String, dynamic>> maps = await db.query('planetas');
+    return maps.map((map) => Planeta.fromMap(map)).toList();
+  }
+
+  Future<int> atualizarPlaneta(Planeta planeta) async {
+    final db = await database;
+    return db.update('planetas', planeta.toMap(), where: 'id = ?', whereArgs: [planeta.id]);
+  }
+
+  Future<int> deletarPlaneta(int id) async {
+    final db = await database;
+    return db.delete('planetas', where: 'id = ?', whereArgs: [id]);
+  }
+}
+
+// Interface principal
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final dbHelper = DatabaseHelper();
+  await dbHelper.inserirPlaneta(Planeta(nome: 'Terra', distanciaDoSol: 1.0, tamanho: 12742.0, apelido: 'Planeta Azul'));
+  await dbHelper.inserirPlaneta(Planeta(nome: 'Marte', distanciaDoSol: 1.52, tamanho: 6779.0, apelido: 'Planeta Vermelho'));
+  await dbHelper.inserirPlaneta(Planeta(nome: 'Júpiter', distanciaDoSol: 5.2, tamanho: 139820.0));
+  runApp(const PlanetaApp());
+}
+
+class PlanetaApp extends StatelessWidget {
+  const PlanetaApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const MaterialApp(
+      title: 'Gerenciador de Planetas',
+      home: ListaPlanetasPage(),
+    );
+  }
+}
+
+class ListaPlanetasPage extends StatefulWidget {
+  const ListaPlanetasPage({super.key});
+
+  @override
+  // ignore: library_private_types_in_public_api
+  _ListaPlanetasPageState createState() => _ListaPlanetasPageState();
+}
+
+class _ListaPlanetasPageState extends State<ListaPlanetasPage> {
+  final DatabaseHelper dbHelper = DatabaseHelper();
+  List<Planeta> planetas = [];
+  bool isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _carregarPlanetas();
+  }
+
+  Future<void> _carregarPlanetas() async {
+    try {
+      final lista = await dbHelper.listarPlanetas();
+      setState(() {
+        planetas = lista;
+        isLoading = false;
+      });
+    } catch (error) {
+      if (kDebugMode) {
+        print("Erro ao carregar planetas: $error");
+      }
+      ScaffoldMessenger.of(context as BuildContext).showSnackBar(
+        const SnackBar(content: Text("Erro ao carregar planetas")),
+      );
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
+
+  void _adicionarPlaneta() {
+    Navigator.push(
+      context as BuildContext,
+      MaterialPageRoute(builder: (context) => const FormularioPlanetaPage()),
+    ).then((_) => _carregarPlanetas());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Planetas Cadastrados')),
+      body: isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : planetas.isEmpty
+              ? const Center(child: Text("Nenhum planeta encontrado"))
+              : ListView.builder(
+                  itemCount: planetas.length,
+                  itemBuilder: (context, index) {
+                    final planeta = planetas[index];
+                    return ListTile(
+                      title: Text(planeta.nome),
+                      subtitle: Text(planeta.apelido ?? ''),
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => DetalhesPlanetaPage(planeta: planeta),
+                        ),
+                      ).then((_) => _carregarPlanetas()),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.delete),
+                        onPressed: () async {
+                          final confirm = await showDialog(
+                            context: context,
+                            builder: (context) => AlertDialog(
+                              title: const Text("Deletar planeta"),
+                              content: const Text("Tem certeza que deseja deletar este planeta?"),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(context, false),
+                                  child: const Text("Cancelar"),
+                                ),
+                                TextButton(
+                                  onPressed: () => Navigator.pop(context, true),
+                                  child: const Text("Deletar"),
+                                ),
+                              ],
+                            ),
+                          );
+                          if (confirm == true) {
+                            await dbHelper.deletarPlaneta(planeta.id!);
+                            _carregarPlanetas();
+                          }
+                        },
+                      ),
+                    );
+                  },
+                ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _adicionarPlaneta,
+        child: const Icon(Icons.add),
+      ),
+    );
+  }
+}
+
+class FormularioPlanetaPage extends StatefulWidget {
+  const FormularioPlanetaPage({super.key});
+
+  @override
+  // ignore: library_private_types_in_public_api
+  _FormularioPlanetaPageState createState() => _FormularioPlanetaPageState();
+}
+
+class _FormularioPlanetaPageState extends State<FormularioPlanetaPage> {
+  final _formKey = GlobalKey<FormState>();
+  String nome = '';
+  double distanciaDoSol = 0;
+  double tamanho = 0;
+  String? apelido;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Adicionar Planeta')),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            children: [
+              TextFormField(
+                decoration: const InputDecoration(labelText: 'Nome do Planeta'),
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Informe o nome do planeta';
+                  }
+                  return null;
+                },
+                onSaved: (value) => nome = value!,
+              ),
+              TextFormField(
+                decoration: const InputDecoration(labelText: 'Distância do Sol (UA)'),
+                keyboardType: TextInputType.number,
+                validator: (value) {
+                  if (value == null || double.tryParse(value) == null || double.parse(value) <= 0) {
+                    return 'Informe uma distância válida';
+                  }
+                  return null;
+                },
+                onSaved: (value) => distanciaDoSol = double.parse(value!),
+              ),
+              TextFormField(
+                decoration: const InputDecoration(labelText: 'Tamanho (km)'),
+                keyboardType: TextInputType.number,
+                validator: (value) {
+                  if (value == null || double.tryParse(value) == null || double.parse(value) <= 0) {
+                    return 'Informe um tamanho válido';
+                  }
+                  return null;
+                },
+                onSaved: (value) => tamanho = double.parse(value!),
+              ),
+              TextFormField(
+                decoration: const InputDecoration(labelText: 'Apelido (Opcional)'),
+                onSaved: (value) => apelido = value,
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: () {
+                  if (_formKey.currentState!.validate()) {
+                    _formKey.currentState!.save();
+                    DatabaseHelper().inserirPlaneta(
+                      Planeta(
+                        nome: nome,
+                        distanciaDoSol: distanciaDoSol,
+                        tamanho: tamanho,
+                        apelido: apelido,
+                      ),
+                    );
+                    Navigator.pop(context);
+                  }
+                },
+                child: const Text('Salvar'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class DetalhesPlanetaPage extends StatelessWidget {
+  final Planeta planeta;
+
+  const DetalhesPlanetaPage({super.key, required this.planeta});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(planeta.nome)),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Nome: ${planeta.nome}', style: const TextStyle(fontSize: 20)),
+            Text('Distância do Sol: ${planeta.distanciaDoSol} UA', style: const TextStyle(fontSize: 20)),
+            Text('Tamanho: ${planeta.tamanho} km', style: const TextStyle(fontSize: 20)),
+            if (planeta.apelido != null)
+              Text('Apelido: ${planeta.apelido}', style: const TextStyle(fontSize: 20)),
+          ],
+        ),
+      ),
+    );
+  }
+} 
